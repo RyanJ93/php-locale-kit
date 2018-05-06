@@ -1,0 +1,605 @@
+#!/usr/bin/php
+
+<?php
+require dirname(__FILE__) . '/php-locale-kit.php';
+
+use PHPLocaleKit\Package;
+use PHPLocaleKit\Translator;
+
+$actions = array(
+	'create' => array(
+		'requiredParams' => 1,
+		'obj' => false
+	),
+	'translate-package' => array(
+		'requiredParams' => 1,
+		'obj' => true
+	),
+	'translate' => array(
+		'requiredParams' => 2,
+		'obj' => true
+	),
+	'detect' => array(
+		'requiredParams' => 1,
+		'obj' => true
+	),
+	'list' => array(
+		'requiredParams' => 1,
+		'obj' => true
+	),
+	'help' => array(
+		'requiredParams' => 0,
+		'obj' => false,
+		'help' => true
+	)
+);
+$actions['man'] = $actions['-man'] = $actions['--man'] = $actions['-help'] = $actions['--help'] = $actions['?'] = $actions['help'];
+$helper = new Class{
+	/**
+	* Establishes a connection with the package (SQLite 3 based database).
+	*/
+	public function createDatabaseConnection(){
+		global $argc, $argv, $database, $options;
+		try{
+			if ( is_string($argv[$argc - 1]) === false || $argv[$argc - 1] === '' ){
+				echo 'Usage error: invalid path provided, aborting!' . PHP_EOL;
+				exit -1;
+			}
+			if ( $options['overwrite'] === true && file_exists($argv[$argc - 1]) === true && unlink($argv[$argc - 1]) === false ){
+				echo 'An error occurred while trying to remove the existing database, aborting!' . PHP_EOL;
+				exit -1;
+			}
+			$database = new SQLite3($argv[$argc - 1]);
+		}catch(\Exception $ex){
+			if ( $options['verbose'] === true ){
+				echo 'Exception (' . $ex->getCode() . '):' . $ex->getMessage() . PHP_EOL;
+			}
+			echo 'Unable to open the database.' . PHP_EOL;
+			exit -1;
+		}
+	}
+};
+$total = microtime(true);
+if ( $argc <= 0 ){
+	echo 'Usage error: locale-kit action [--options] [-params value] [path] [text] [locale] [original locale]' . PHP_EOL;
+	exit -1;
+}
+$options = array(
+	'numericIDs' => true,
+	'overwrite' => false,
+	'locale' => NULL,
+	'provider' => Translator::YANDEX,
+	'token' => NULL,
+	'fill' => false,
+	'override' => false,
+	'locales' => array(),
+	'skipLocales' => array(),
+	'verbose' => false,
+	'chunk' => 10,
+	'originalLocale' => NULL,
+	'hints' => NULL,
+	'codes' => false,
+	'ui' => 'en',
+	'labels' => array(),
+	'ignoredLabels' => array(),
+	'format' => 'text'
+);
+$skipNext = $createObject = false;
+$translator = $database = $action = NULL;
+$acts = array_keys($actions);
+foreach ( $argv as $key => $value ){
+	if ( in_array($value, $acts) === true ){
+		$action = $value;
+		break;
+	}
+	unset($argv[$key]);
+}
+$argv = array_values($argv);
+$argc = count($argv);
+if ( $action === NULL ){
+	echo 'Usage error: unsupported action, please use the action "help" to list supported actions, aborting!' . PHP_EOL;
+	exit -1;
+}
+foreach ( $argv as $key => $value ){
+	if ( $value === '' ){
+		continue;
+	}
+	if ( $skipNext === true ){
+		$skipNext = false;
+		continue;
+	}
+	switch ( $value ){
+		case '-token':{
+			$buffer = is_string($argv[$key + 1]) === false || $argc < ( $key + $actions[$action]['requiredParams'] + 1 ) ? NULL : $argv[$key + 1];
+			if ( $buffer === NULL || $buffer === '' ){
+				echo 'Usage error: invalid API token, aborting!' . PHP_EOL;
+				exit -1;
+			}
+			$options['token'] = $buffer;
+			$skipNext = true;
+		}break;
+		case '-provider':{
+			$buffer = is_string($argv[$key + 1]) === false || $argc < ( $key + $actions[$action]['requiredParams'] + 1 ) ? NULL : strtolower($argv[$key + 1]);
+			if ( $buffer === NULL || $buffer === '' || Translator::supportedProvider($buffer) === false ){
+				echo 'Usage error: unsupproted or invalid provider name, aborting!' . PHP_EOL;
+				exit -1;
+			}
+			$options['provider'] = $buffer;
+			$skipNext = true;
+		}break;
+		case '-locale':{
+			$buffer = is_string($argv[$key + 1]) === false || $argc < ( $key + $actions[$action]['requiredParams'] + 1 ) ? NULL : $argv[$key + 1];
+			if ( $buffer === NULL || $buffer === '' ){
+				echo 'Usage error: invalid locale code, aborting!' . PHP_EOL;
+				exit -1;
+			}
+			$options['locale'] = $buffer;
+			$skipNext = true;
+		}break;
+		case '-locales':{
+			if ( is_string($argv[$key + 1]) === true && $argc >= ( $key + $actions[$action]['requiredParams'] + 1 ) && $argv[$key + 1] !== '' ){
+				$buffer = explode(',', $argv[$key + 1]);
+				foreach ( $buffer as $_key => $_value ){
+					$locale = strtolower(trim($_value));
+					if ( $locale !== '' ){
+						$options['locales'][] = $locale;
+					}
+				}
+			}
+			$skipNext = true;
+		}break;
+		case '-skip-locales':{
+			if ( is_string($argv[$key + 1]) === true && $argc >= ( $key + $actions[$action]['requiredParams'] + 1 ) && $argv[$key + 1] !== '' ){
+				$buffer = explode(',', $argv[$key + 1]);
+				foreach ( $buffer as $_key => $_value ){
+					$locale = strtolower(trim($_value));
+					if ( $locale !== '' ){
+						$options['skipLocales'][] = $locale;
+					}
+				}
+			}
+			$skipNext = true;
+		}break;
+		case '--string-ids':{
+			$options['numericIDs'] = false;
+		}break;
+		case '--overwrite':{
+			$options['overwrite'] = true;
+		}break;
+		case '--fill':{
+			$createObject = true;
+			$options['fill'] = true;
+		}break;
+		case '--verbose':{
+			$options['verbose'] = true;
+		}break;
+		case '--override':{
+			$options['override'] = true;
+		}break;
+		case '--codes':{
+			$options['codes'] = true;
+		}break;
+		case '-chunk':{
+			$buffer = is_string($argv[$key + 1]) === false || $argc < ( $key + $actions[$action]['requiredParams'] + 1 ) ? NULL : intval($argv[$key + 1]);
+			$options['chunk'] = $buffer === NULL || $buffer <= 0 ? 1 : $buffer;
+			$skipNext = true;
+		}break;
+		case '-original-locale':{
+			$buffer = is_string($argv[$key + 1]) === false || $argc < ( $key + $actions[$action]['requiredParams'] + 1 ) ? null : $argv[$key + 1];
+			if ( $buffer !== NULL && $buffer !== '' ){
+				$options['originalLocale'] = $buffer;
+			}
+			$skipNext = true;
+		}break;
+		case '-hints':{
+			if ( is_string($argv[$key + 1]) === true && $argc >= ( $key + $actions[$action]['requiredParams'] + 1 ) && $argv[$key + 1] !== '' ){
+				$buffer = explode(',', $argv[$key + 1]);
+				foreach ( $buffer as $_key => $_value ){
+					$locale = strtolower(trim($_value));
+					if ( $locale !== '' ){
+						$options['hints'][] = $locale;
+					}
+				}
+			}
+			$skipNext = true;
+		}break;
+		case '-ui':{
+			$buffer = is_string($argv[$key + 1]) === false || $argc < ( $key + $actions[$action]['requiredParams'] + 1 ) ? null : $argv[$key + 1];
+			if ( $buffer !== NULL && $buffer !== '' ){
+				$options['ui'] = $buffer;
+			}
+			$skipNext = true;
+		}break;
+		case '-labels':{
+			if ( is_string($argv[$key + 1]) === true && $argc >= ( $key + $actions[$action]['requiredParams'] + 1 ) && $argv[$key + 1] !== '' ){
+				$buffer = explode(',', $argv[$key + 1]);
+				foreach ( $buffer as $_key => $_value ){
+					$label = trim($_value);
+					if ( $label !== '' ){
+						$options['labels'][] = $label;
+					}
+				}
+			}
+			$skipNext = true;
+		}break;
+		case '-ignored-labels':{
+			if ( is_string($argv[$key + 1]) === true && $argc >= ( $key + $actions[$action]['requiredParams'] + 1 ) && $argv[$key + 1] !== '' ){
+				$buffer = explode(',', $argv[$key + 1]);
+				foreach ( $buffer as $_key => $_value ){
+					$ignoredLabel = trim($_value);
+					if ( $ignoredLabel !== '' ){
+						$options['ignoredLabels'][] = $ignoredLabel;
+					}
+				}
+			}
+			$skipNext = true;
+		}break;
+		case '-format':{
+			$options['format'] = is_string($argv[$key + 1]) === false || $argc < ( $key + $actions[$action]['requiredParams'] + 1 ) ? 'text' : ( strtolower($argv[$key + 1]) === 'html' ? 'html' : 'text' );
+			$skipNext = true;
+		}break;
+	}
+}
+if ( isset($actions[$action]['help']) === false ){
+	if ( $createObject === true || $actions[$action]['obj'] === true ){
+		if ( $options['token'] === NULL ){
+			echo 'Usage error: no API token has been defined, aborting!';
+			exit -1;
+		}
+		$translator = new Translator();
+		$translator->setProvider($options['provider'])->setToken($options['token'])->setVerbose($options['verbose'])->setTextFormat($options['format']);
+	}
+	switch ( $action ){
+		case 'create':{
+			$helper->createDatabaseConnection();
+			if ( $options['fill'] === true && $translator === NULL ){
+				echo 'Usage error: if you want to use the "--fill" option you must provide an API token, aborting!' . PHP_EOL;
+				exit -1;
+			}
+			if ( $options['overwrite'] === false && file_exists($argv[$argc - 1]) === true ){
+				echo 'Cannot create the package because the package already exists, use the option "--overwrite" to overwrite it, aborting!' . PHP_EOL;
+				exit -1;
+			}
+			try{
+				$database->exec('CREATE TABLE IF NOT EXISTS locales (id INTEGER NOT NULL, code TEXT NOT NULL, lang TEXT NOT NULL, locked BOOLEAN DEFAULT 0, PRIMARY KEY(id));');
+				$database->exec('CREATE TABLE IF NOT EXISTS meta (key TEXT NOT NULL, value TEXT, PRIMARY KEY(key));');
+				if ( $options['numericIDs'] === true ){
+					$database->exec('CREATE TABLE IF NOT EXISTS labels (id INTEGER NOT NULL, locale INTEGER NOT NULL, value TEXT NOT NULL, locked BOOLEAN DEFAULT 0, PRIMARY KEY(id, locale));');
+				}else{
+					$database->exec('CREATE TABLE IF NOT EXISTS labels (id TEXT NOT NULL, locale INTEGER NOT NULL, value TEXT NOT NULL, locked BOOLEAN DEFAULT 0, PRIMARY KEY(id, locale));');
+				}
+				$database->exec('INSERT INTO meta (key, value) VALUES ("creator", "Locale kit");');
+				$statement = $database->prepare('INSERT INTO meta (key, value) VALUES ("identifier", :value);');
+				$statement->bindValue('value', hash('md5', microtime(true)), \SQLITE3_TEXT);
+				$statement->execute();
+				$statement = $database->prepare('INSERT INTO meta (key, value) VALUES ("version", :value);');
+				$statement->bindValue('value', Package::VERSION, \SQLITE3_TEXT);
+				$statement->execute();
+				if ( $options['fill'] === false ){
+					echo ( $options['verbose'] === true ? ( 'Database created successfully in ' . ( microtime(true) - $total ) . ' seconds.' ) : 'Database created successfully.' ) . PHP_EOL;
+					exit;
+				}
+			}catch(\Exception $ex){
+				if ( $options['verbose'] === true ){
+					echo 'Exception (' . $ex->getCode() . '):' . $ex->getMessage() . PHP_EOL;
+				}
+				echo 'An error occurred while creating the package, aborting!' . PHP_EOL;
+				exit -1;
+			}
+			try{
+				$languages = $translator->getSupportedLanguages('en');
+			}catch(\Exception $ex){
+				if ( $options['verbose'] === true ){
+					echo 'Exception (' . $ex->getCode() . '):' . $ex->getMessage() . PHP_EOL;
+				}
+				echo 'An error occurred while retrieving the list of the languages supported by the provider, aborting!' . PHP_EOL;
+				exit -1;
+			}
+			try{
+				foreach ( $languages as $key => $value ){
+					$lang = strpos($key, '-');
+					$statement = $database->prepare('INSERT INTO locales (code, lang, locked) VALUES (:code, :lang, 0);');
+					$statement->bindValue('code', $key, \SQLITE3_TEXT);
+					$statement->bindValue('lang', ( $lang !== false ? substr($key, 0, $lang) : $key ), \SQLITE3_TEXT);
+					$statement->execute();
+				}
+				echo ( $options['verbose'] === true ? ( 'Database created and filled successfully in ' . ( microtime(true) - $total ) . ' seconds.' ) : 'Database created and filled successfully.' ) . PHP_EOL;
+				exit;
+			}catch(\Exception $ex){
+				if ( $options['verbose'] === true ){
+					echo 'Exception (' . $ex->getCode() . '):' . $ex->getMessage() . PHP_EOL;
+				}
+				echo 'An error occurred while creating the package, aborting!' . PHP_EOL;
+				exit -1;
+			}
+		}break;
+		case 'translate-package':{
+			$helper->createDatabaseConnection();
+			if ( $translator === NULL ){
+				echo 'Usage error: no API key provided, aborting!' . PHP_EOL;
+				exit -1;
+			}
+			if ( $options['locale'] === NULL ){
+				echo 'Usage error: no start locale code has been defined, aborting!' . PHP_EOL;
+				exit -1;
+			}
+			$time = microtime(true);
+			try{
+				$results = $database->query(( $options['override'] === true ? 'SELECT id, code FROM locales;' : 'SELECT id, code FROM locales WHERE locked = 0;' ));
+				$elements = array();
+				while ( $row = $results->fetchArray() ){
+					$elements[] = $row;
+				}
+			}catch(\Exception $ex){
+				if ( $options['verbose'] === true ){
+					echo 'Exception (' . $ex->getCode() . '):' . $ex->getMessage() . PHP_EOL;
+				}
+				echo 'An error occurred in database transaction, aborting!' . PHP_EOL;
+				exit -1;
+			}
+			$id = NULL;
+			$locales = array();
+			if ( isset($options['locales'][0]) === true ){
+				foreach ( $elements as $key => $value ){
+					if ( $value['code'] !== $options['locale'] && in_array($value['code'], $options['locales']) === true ){
+						$locales[] = array(
+							'id' => $value['id'],
+							'locale' => $value['code']
+						);
+						continue;
+					}
+					if ( $value['code'] === $options['locale'] ){
+						$id = $value['id'];
+					}
+				}
+			}else{
+				foreach ( $elements as $key => $value ){
+					if ( $value['code'] === $options['locale'] ){
+						$id = $value['id'];
+						continue;
+					}
+					$locales[] = array(
+						'id' => $value['id'],
+						'locale' => $value['code']
+					);
+				}
+			}
+			if ( isset($options['skipLocales'][0]) === true ){
+				foreach ( $locales as $key => $value ){
+					if ( in_array($value, $options['skipLocales']) === true ){
+						unset($locales[$key]);
+					}
+				}
+				$locales = array_values($locales);
+			}
+			if ( $id === NULL ){
+				echo 'The given locale is not supported by this package, aborting!' . PHP_EOL;
+				exit -1;
+			}
+			if ( isset($locales[0]) === false ){
+				echo 'No locale is going to be translated, exiting!' . PHP_EOL;
+				exit -1;
+			}
+			echo ( $options['verbose'] === true ? ( 'Selected ' . count($locales) . ' locales in ' . ( microtime(true) - $time ) . ' seconds, checking provider support...' ) : ( 'Selected ' . count($locales) . ' locales, checking provider support...' ) ) . PHP_EOL;
+			$time = microtime(true);
+			$supportedLanguages = array();
+			try{
+				$elements = $translator->getSupportedLanguages('en');
+			}catch(\Exception $ex){
+				if ( $options['verbose'] === true ){
+					echo 'Exception (' . $ex->getCode() . '):' . $ex->getMessage() . PHP_EOL;
+				}
+				echo 'An error occurred while getting the list of supported languages from the provider, aborting!' . PHP_EOL;
+				exit -1;
+			}
+			$elements = array_keys($elements);
+			foreach ( $locales as $key => $value ){
+				if ( isset($value['locale']) === true && $value['locale'] !== '' && in_array($value['locale'], $elements) === false ){
+					unset($locales);
+				}
+			}
+			$locales = array_values($locales);
+			if ( isset($locales[0]) === false ){
+				echo 'No locale is going to be translated, exiting!' . PHP_EOL;
+				exit -1;
+			}
+			$supported = false;
+			foreach ( $elements as $key => $value ){
+				if ( $value === $options['locale'] ){
+					$supported = true;
+					break;
+				}
+			}
+			if ( $supported === false ){
+				echo 'The given locale is not supported by the provider, aborting!' . PHP_EOL;
+				exit -1;
+			}
+			if ( $options['verbose'] === true ){
+				echo 'Language list obtained in ' . ( microtime(true) - $time ) . ' seconds.' . PHP_EOL;
+				$time = microtime(true);
+			}
+			echo 'Starting translating ' . count($locales) . ' locales...' . PHP_EOL;
+			echo 'Loading labels...' . PHP_EOL;
+			$query = 'SELECT id, value, locked FROM labels WHERE locale = ?';
+			$params = array();
+			$params[] = $id;
+			if ( $options['override'] !== true ){
+				$query .= ' AND locked = 0';
+			}
+			if ( isset($options['override'][0]) === true ){
+				$index = 0;
+				$query .= ' AND id IN(';
+				foreach ( $options['override'] as $key => $value ){
+					$query .= $index === 0 ? '?' : ',?';
+					$params[] = $value;
+					$index++;
+				}
+				$query .= ')';
+			}
+			if ( isset($options['ignoredLabels'][0]) === true ){
+				$index = 0;
+				$query .= ' AND id NOT IN(';
+				foreach ( $options['ignoredLabels'] as $key => $value ){
+					$query .= $index === 0 ? '?' : ',?';
+					$params[] = $value;
+					$index++;
+				}
+				$query .= ')';
+			}
+			try{
+				$statement = $database->prepare($query . ' ORDER BY id ASC;');
+				$index = 0;
+				foreach ( $params as $key => $value ){
+					$index++;
+					if ( is_string($value) === true ){
+						$statement->bindValue($index, $value, \SQLITE3_TEXT);
+						continue;
+					}
+					$statement->bindValue($index, $value, \SQLITE3_INTEGER);
+				}
+				$results = $statement->execute();
+				$elements = array();
+				while ( $row = $results->fetchArray() ){
+					$elements[$row['id']] = array(
+						'value' => $row['value'],
+						'locked' => $options['override'] === true || $row['locked'] !== 1 ? 0 : 1
+					);
+				}
+			}catch(\Exception $ex){
+				if ( $options['verbose'] === true ){
+					echo 'Exception (' . $ex->getCode() . '):' . $ex->getMessage() . PHP_EOL;
+				}
+				echo 'An error occurred in database transaction, aborting!' . PHP_EOL;
+				exit -1;
+			}
+			if ( empty($elements) === true ){
+				echo 'No label found, exiting.' . PHP_EOL;
+				exit -1;
+			}
+			$labelsCount = count($elements);
+			echo ( $options['verbose'] === true ? ( 'Found ' . $labelsCount . ' labels in ' . ( microtime(true) - $time ) . ' seconds.' ) : ( 'Found ' . $labelsCount . ' labels.' ) )  . PHP_EOL;
+			$time = microtime(true);
+			$chunked = array_chunk($elements, $options['chunk'], true);
+			$operations = array();
+			foreach ( $locales as $key => $value ){
+				echo 'Translating locale with code "' . $value['locale'] . '".'  . PHP_EOL;
+				foreach ( $chunked as $_key => $_value ){
+					$texts = array();
+					foreach ( $_value as $__key => $__value ){
+						$texts[] = $__value['value'];
+					}
+					$buffer = $translator->translateText($texts, $value['locale'], $options['locale']);
+					foreach ( $buffer as $__key => $__value ){
+						foreach ( $elements as $___key => $___value ){
+							if ( $___value['value'] === $__key ){
+								$operations[] = array(
+									'id' => $___key,
+									'locale' => $value['id'],
+									'value' => $__value,
+									'locked' => $___value['locked']
+								);
+								break;
+							}
+						}
+					}
+				}
+				echo 'Translated locale with code "' . $value['locale'] . '".'  . PHP_EOL;
+			}
+			echo ( $options['verbose'] === true ? ( 'All labels have been translated in ' . ( microtime(true) - $time ) . ' seconds, updating texts...' ) : ( 'All labels have been translated, updating texts...' ) )  . PHP_EOL;
+			$time = microtime(true);
+			try{
+				$statement = $database->prepare('INSERT OR REPLACE INTO labels (id, locale, value, locked) VALUES (:id, :locale, :value, :locked);');
+				foreach ( $operations as $key => $value ){
+					$statement->bindValue('id', $value['id'], \SQLITE3_INTEGER);
+					$statement->bindValue('locale', $value['locale'], \SQLITE3_INTEGER);
+					$statement->bindValue('value', $value['value'], \SQLITE3_TEXT);
+					$statement->bindValue('locked', $value['locked'], \SQLITE3_INTEGER);
+					$statement->execute();
+				}
+				$statement = $database->prepare('INSERT OR REPLACE INTO meta (key, value) VALUES ("last_translation", :value);');
+				$statement->bindValue('value', strval(time()), \SQLITE3_TEXT);
+				$statement->execute();
+				$statement = $database->prepare('INSERT OR REPLACE INTO meta (key, value) VALUES ("identifier", :value);');
+				$statement->bindValue('value', hash('md5', microtime(true)), \SQLITE3_TEXT);
+				$statement->execute();
+				echo ( $options['verbose'] === true ? ( 'All operations done ' . ( microtime(true) - $total ) . ' seconds.' ) : ( 'All operations done.' ) )  . PHP_EOL;
+				exit;
+			}catch(\Exception $ex){
+				if ( $options['verbose'] === true ){
+					echo 'Exception (' . $ex->getCode() . '):' . $ex->getMessage() . PHP_EOL;
+				}
+				echo 'An error occurred in database transaction, aborting!' . PHP_EOL;
+				exit -1;
+			}
+		}break;
+		case 'translate':{
+			try{
+				echo array_values($translator->translateText(array($argv[$argc - 2]), $argv[$argc - 1], $options['originalLocale']))[0] . PHP_EOL;
+				exit;
+			}catch(\Exception $ex){
+				if ( $options['verbose'] === true ){
+					echo 'Exception (' . $ex->getCode() . '):' . $ex->getMessage() . PHP_EOL;
+				}
+				echo 'An error occurred while translating the text, aborting!' . PHP_EOL;
+				exit -1;
+			}
+		}break;
+		case 'detect':{
+			try{
+				echo array_values($translator->detectLanguage(array($argv[$argc - 2]), $options['hints'], true))[0] . PHP_EOL;
+				exit;
+			}catch(\Exception $ex){
+				if ( $options['verbose'] === true ){
+					echo 'Exception (' . $ex->getCode() . '):' . $ex->getMessage() . PHP_EOL;
+				}
+				echo 'An error occurred while detecting the language of the given text, aborting!' . PHP_EOL;
+				exit -1;
+			}
+		}break;
+		case 'list':{
+			try{
+				echo 'Supported languages: ' . ( $options['codes'] === true ? implode(', ', array_keys($translator->getSupportedLanguages($options['ui']))) : implode(', ', array_values($translator->getSupportedLanguages($options['ui']))) ) . PHP_EOL;
+				exit;
+			}catch(\Exception $ex){
+				if ( $options['verbose'] === true ){
+					echo 'Exception (' . $ex->getCode() . '):' . $ex->getMessage() . PHP_EOL;
+				}
+				echo 'An error occurred while getting the list of all supported languages from the provider, aborting!' . PHP_EOL;
+				exit -1;
+			}
+		}break;
+	}
+}else{
+	echo 'This utility is shipped as part of the "php-locale-kit" package.' . PHP_EOL;
+	echo 'You can use this utility to create and translate packages stored as SQLite database.' . PHP_EOL;
+	echo 'Usage: ./php-locale-kit action [--options] [-params value] [path] [text] [locale] [original locale]' . PHP_EOL;
+	echo PHP_EOL . 'Available actions:' . PHP_EOL . PHP_EOL;
+	echo "\tcreate: Creates a new package (as SQLite database file), if it already exists, an error will be thrown, unless you set the \"--overwrite\" option." . PHP_EOL;
+	echo "\translate-package: Translates the package according to the given options." . PHP_EOL;
+	echo "\translate: Translates a given text to a given locale, optionally you can specify the language of the input text." . PHP_EOL;
+	echo "\tdetect: Detects the language of a given text." . PHP_EOL;
+	echo "\tlist: Returns a list of all the locales supported by the service provider in use." . PHP_EOL;
+	echo "\thelp: Displays the documentation page." . PHP_EOL;
+	echo "\tman: Alias for \"help\"." . PHP_EOL;
+	echo PHP_EOL . 'Available parameters:' . PHP_EOL . PHP_EOL;
+	echo "\t-token: The API key for the selected provider, this is required to use every service provider." . PHP_EOL;
+	echo "\t-provider: The name of the provider to use, by default, \"Yandex\" is used, currently supported providers are only \Google\" (paid) and \"Yandex\" (10M chars/month free then paid), names are case-insensitive." . PHP_EOL;
+	echo "\t-locale: The start locale code used in package translation, note that this locale must be supported by both the package and the provider." . PHP_EOL;
+	echo "\t-locales: A list of the locales that must be translated, multiple locale codes can be separated by a comma, note that the specified locales must be supported by both the package and the service provider." . PHP_EOL;
+	echo "\t-skip-locales: A list of the locales that must not be translated, multiple locale codes can be separated by a comma." . PHP_EOL;
+	echo "\t-chunk: An integer number that specifies how many labels should be translated for each request, use 1 to send a single request for each label, by default 10 is used." . PHP_EOL;
+	echo "\t-original-locale: The language of the given text, note that this option is considered only when using the actions \"translate\" and \"detect\"." . PHP_EOL;
+	echo "\t-hints: One or more locale codes that will be sent as probably locales for language detection, note that this option is considered only when using \"detect\" as action and Yandex as service provider, you can set multiple codes by separating them with a comma." . PHP_EOL;
+	echo "\t-ui: The language in which the language names should be returned, this option is considered only when using the actions \"list\"." . PHP_EOL;
+	echo "\t-labels: One of more label IDs that will be translated instead of translating all the labels contained in the package." . PHP_EOL;
+	echo "\t-ignored-labels: One of more label IDs that will not be translated." . PHP_EOL;
+	echo "\t-format: A string containing the name of the format of the text contained within the package, currently HTML and text are the only formats supported, by default text is used." . PHP_EOL;
+	echo PHP_EOL . 'Available options:' . PHP_EOL . PHP_EOL;
+	echo "\t--string-ids: Using this option it means that label identifiers are represented by strings instead of integer numbers." . PHP_EOL;
+	echo "\t-overwrite: Using this option in package creation it means that if a package with the same path is already existing it will be overwritten, otherwise an error will be thrown." . PHP_EOL;
+	echo "\t--fill: In package creation, with this option the table that contains the supported locales will be filled with all supported locales of the given provider, note that the default provider is Yandex." . PHP_EOL;
+	echo "\t--verbose: Using this option, all errors will be logged to the console, this can be helpful in debug." . PHP_EOL;
+	echo "\t--override: Using this option, locked locales and labels will be translated as well, otherwise they will be skipped." . PHP_EOL;
+	echo "\t--codes: Using this option, when retrieving the list of all the languages supported by the provider, will be returned a list of locale codes, otherwise the list of the language names." . PHP_EOL;
+	exit;
+}

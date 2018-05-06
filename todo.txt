@@ -1,0 +1,4 @@
+Additional features:
+
+* Add support for Bing Translator.
+* Take care of hints when caching results of language detection.

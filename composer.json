@@ -1,0 +1,33 @@
+{
+	"name": "ryanj93/php-locale-kit",
+	"version": "1.1.0",
+	"description": "A simple library that allows to manage language packages and translate texts with PHP.",
+	"type": "library",
+	"license": "GPL-3.0-or-later",
+	"homepage": "https://github.com/RyanJ93/php-locale-kit#readme",
+	"authors": [{
+		"name": "Enrico Sola",
+		"email": "sola.enrico.93@gmail.com",
+		"homepage": "https://www.enricosola.com"
+	}],
+	"require": {
+        "php": ">=7.0"
+    },
+    "require-dev": {
+        "php": ">=7.0"
+    },
+    "suggest":{
+	    "php-tiny-cacher": "Needed if you are going to take advantage of data caching."
+    },
+    "keywords": [
+		"translation",
+		"localization"
+		"sqlite",
+		"sqlite3"
+	],
+	"autoload": {
+        "files": [
+	        "php-locale-kit.php"
+	    ]
+    }
+}

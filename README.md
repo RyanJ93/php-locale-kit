@@ -1,6 +1,14 @@
-# Locale Kit
+# PHP Locale Kit
 
-Locale Kit is a simple library that allows to manage language packages based on SQLite3 database. It provide also utilities that allow to translate texts as well as detect their language supporting Google and Yandex as service provider.
+PHP Locale Kit is a simple library that allows to manage language packages based on SQLite3 database. It provide also utilities that allow to translate texts as well as detect their language supporting Google and Yandex as service provider. The package is shipped with a CLI utility that allows to create and translate language packages, for more information and documentation check the file called "cli.md".
+
+## Installation
+
+Before installing the package, make sure that the `sqlite3` extension is installed, usually this extension is shipped with your PHP installation. To install this package through Composer just run this command:
+
+````bash
+composer require ryanj93/php-locale-kit
+````
 
 ## Usage: Package
 
@@ -65,7 +73,16 @@ It will return an associative array having as key the original text and as value
 $languages = $translator->getSupportedLanguages('en');
 ````
 
-Both the classes support cache, data caching is provided by the library "php-tiny-cacher", you can find more information about it on its [repository on GitHub](https://github.com/RyanJ93/php-tiny-cacher).
+Both the classes support data caching, you can set up cache using these methods:
+
+````php
+//Setup cached for the package.
+$package->setCache(true)->setCacheHandler($cache);
+//Setup cached for the translator.
+$translator->setCache(true)->setCacheHandler($cache);
+````
+
+Data caching is provided by the library "php-tiny-cacher", as you can see in the examples, the variable "$cache" is an instance of the class "PHPTinyCacher" that allows to store data using different options such as Redis, Memcached and file. You can find more information about it on its [repository on GitHub](https://github.com/RyanJ93/php-tiny-cacher).
 
 If you like this project and think that is useful don't be scared and feel free to contribute reporting bugs, issues or suggestions or if you feel generous, you can send a donation [here](https://www.enricosola.com/about#donations).
 
